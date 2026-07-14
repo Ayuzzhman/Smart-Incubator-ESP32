@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "author": "Ayushman Shukla",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": -4.76, "attrs": {} },
+    { "type": "wokwi-servo", "id": "servo1", "top": 151.6, "left": 230.4, "attrs": {} },
+    {
+      "type": "wokwi-lcd1602",
+      "id": "lcd1",
+      "top": -80,
+      "left": 130.4,
+      "attrs": { "pins": "i2c" }
+    },
+    { "type": "wokwi-dht22", "id": "dht1", "top": 67.5, "left": -130.2, "attrs": {} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [ "v19.2", "h-67.2", "v-172.8" ] ],
+    [ "dht1:SDA", "esp:15", "green", [ "v57.6", "h249.7", "v-9.6" ] ],
+    [ "dht1:GND", "esp:GND.1", "black", [ "v19.2", "h76.8", "v-48" ] ],
+    [ "lcd1:GND", "esp:GND.2", "black", [ "h0" ] ],
+    [ "esp:VN", "lcd1:VCC", "green", [ "h-9.45", "v-96" ] ],
+    [ "lcd1:SDA", "esp:21", "green", [ "h-9.6", "v105.8" ] ],
+    [ "lcd1:SCL", "esp:22", "green", [ "h-19.2", "v67.5" ] ],
+    [ "esp:GND.3", "servo1:GND", "black", [ "h115.2", "v115.2", "h9.6" ] ],
+    [ "servo1:V+", "esp:VN", "green", [ "h-9.6", "v48.1", "h-412.8", "v-211.2" ] ],
+    [ "esp:13", "servo1:PWM", "green", [ "h-19.05", "v57.6", "h9.6" ] ]
+  ],
+  "dependencies": {}
+}
