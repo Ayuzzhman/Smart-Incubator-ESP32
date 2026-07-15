@@ -2,64 +2,123 @@
 #include <DHT.h>
 #include <ESP32Servo.h>
 
-// 1. Tell the code which pins we wired our components to
-#define DHTPIN 15          // DHT22 Data pin is on GPIO 15
-#define DHTTYPE DHT22      // We are specifically using the DHT22 sensor
-#define SERVO_PIN 13       // Servo signal wire is on GPIO 13
+// Pin Connections
+#define DHTPIN 15          
+#define DHTTYPE DHT22      
+#define SERVO_PIN 13       
+#define BUTTON_PIN 14      
+#define BUZZER_PIN 12      
 
-// 2. Initialize our components using their libraries
+// Initialize hardware objects
 DHT dht(DHTPIN, DHTTYPE);
-LiquidCrystal_I2C lcd(0x27, 16, 2); // 0x27 is the default address for this LCD screen
+LiquidCrystal_I2C lcd(0x27, 16, 2);
 Servo myServo;
 
+// Interrupt & Debouncing Variables
+volatile bool manualOverrideActive = false; 
+unsigned long lastDebounceTime = 0;         
+const unsigned long debounceDelay = 250;    // 250ms ignore window to prevent switch bouncing
+
+// Non-blocking Timing Variables (Eliminating delay() so the system never freezes)
+unsigned long lastTempUpdate = 0;
+const unsigned long tempInterval = 2000;    // Check temperature every 2 seconds
+
+unsigned long lastBuzzerToggle = 0;
+const unsigned long buzzerInterval = 500;   // Buzzer beeps every 0.5 seconds when triggered
+bool buzzerState = false;
+
+// --- HARDWARE INTERRUPT SERVICE ROUTINE (ISR) ---
+// This function triggers instantly the microsecond the button is pressed
+void IRAM_ATTR handleButtonInterrupt() {
+  unsigned long currentTime = millis();
+  
+  // Software Debounce: Filter out rapid, accidental hardware electrical bounces
+  if (currentTime - lastDebounceTime > debounceDelay) {
+    manualOverrideActive = !manualOverrideActive; // Toggle override state
+    lastDebounceTime = currentTime;               
+  }
+}
+
 void setup() {
-  // This code runs ONCE when the ESP32 turns on
+  dht.begin();
+  myServo.attach(SERVO_PIN);
+  pinMode(BUZZER_PIN, OUTPUT);
   
-  dht.begin();          // Wake up the temperature sensor
-  myServo.attach(SERVO_PIN); // Wake up the servo motor
-  
-  lcd.init();           // Wake up the LCD screen
-  lcd.backlight();      // Turn on the screen's background light
-  
-  // Print a friendly starting message to the screen
-  lcd.setCursor(0, 0);  // Position cursor at Column 0, Row 0
+  // Set up button with an internal pull-up resistor (defaults to HIGH, goes LOW when pressed)
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  // Tell the ESP32 to monitor GPIO 14 for a falling edge (button press) and jump to the ISR
+  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), handleButtonInterrupt, FALLING);
+
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
   lcd.print("System Starting");
-  delay(2000);          // Wait 2 seconds
-  lcd.clear();          // Clear the screen
+  delay(1500);
+  lcd.clear();
 }
 
 void loop() {
-  // This code runs on a continuous, infinite loop over and over again
-  
-  // Read the temperature as Celsius
-  float temperature = dht.readTemperature();
+  unsigned long currentMillis = millis();
 
-  // Check if the sensor failed to read (just in case)
-  if (isnan(temperature)) {
+  // NON-BLOCKING TEMP READINGS: Update reading variable every 2 seconds without stopping the program
+  static float currentTemp = 24.0; 
+  if (currentMillis - lastTempUpdate >= tempInterval) {
+    lastTempUpdate = currentMillis;
+    currentTemp = dht.readTemperature();
+  }
+
+  // Handle a failed sensor read gracefully
+  if (isnan(currentTemp)) {
     lcd.setCursor(0, 0);
     lcd.print("Sensor Error! ");
     return;
   }
 
-  // ---- VISUALS: Display data on the screen ----
-  lcd.setCursor(0, 0);         // Row 0
-  lcd.print("Temp: ");
-  lcd.print(temperature, 1);   // Print temp with 1 decimal place (e.g., 24.5)
-  lcd.print(" C   ");          // Spaces clear out leftover old numbers
-
-  // ---- ENGINEERING LOGIC: Control Loop ----
-  // If the incubator gets too hot (above 35°C), open the safety vent!
-  if (temperature > 35.0) {
-    lcd.setCursor(0, 1);       // Move to Row 1
-    lcd.print("VENT: OPEN (HOT)");
-    myServo.write(90);         // Rotate servo to 90 degrees (open position)
-  } 
-  // Otherwise, keep the vent closed
-  else {
-    lcd.setCursor(0, 1);       // Move to Row 1
-    lcd.print("VENT: CLOSED   ");
-    myServo.write(0);          // Rotate servo back to 0 degrees (closed position)
+  // --- STATE CONTROL LOGIC ---
+  
+  // STATE 1: Manual Override is Enabled
+  if (manualOverrideActive) {
+    lcd.setCursor(0, 0);
+    lcd.print("OVERRIDE ACTIVE ");
+    lcd.setCursor(0, 1);
+    lcd.print("VENT: OPEN (MAN)");
+    myServo.write(90);             // Force the physical vent open
+    noTone(BUZZER_PIN);            // Keep buzzer off during manual maintenance
   }
+  
+  // STATE 2: Automatic Critical Temperature Alarm (> 35°C)
+  else if (currentTemp > 35.0) {
+    lcd.setCursor(0, 0);
+    lcd.print("Temp: ");
+    lcd.print(currentTemp, 1);
+    lcd.print(" C (HOT!) ");
+    
+    lcd.setCursor(0, 1);
+    lcd.print("VENT: OPEN (ALRM)");
+    myServo.write(90);             // Autonomously open vent
 
-  delay(2000); // Wait 2 seconds before checking the temperature again
+    // Non-blocking alarm tone: Beep the buzzer on/off every 500ms
+    if (currentMillis - lastBuzzerToggle >= buzzerInterval) {
+      lastBuzzerToggle = currentMillis;
+      buzzerState = !buzzerState;
+      if (buzzerState) {
+        tone(BUZZER_PIN, 1000);    // Play high-pitch 1000Hz beep
+      } else {
+        noTone(BUZZER_PIN);        // Silence beep
+      }
+    }
+  } 
+  
+  // STATE 3: Normal Automatic Operation
+  else {
+    lcd.setCursor(0, 0);
+    lcd.print("Temp: ");
+    lcd.print(currentTemp, 1);
+    lcd.print(" C      ");
+    
+    lcd.setCursor(0, 1);
+    lcd.print("VENT: CLOSED    ");
+    myServo.write(0);              // Keep vent closed
+    noTone(BUZZER_PIN);            // Ensure buzzer is quiet
+  }
 }
